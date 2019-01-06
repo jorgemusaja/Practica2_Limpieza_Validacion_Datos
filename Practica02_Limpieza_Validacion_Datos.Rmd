@@ -1,0 +1,406 @@
+---
+title: "Práctica 2"
+author: "Jorge Cutipa Musaja"
+date: '`r format(Sys.Date(),"%e de %B, %Y")`'
+output:
+  #pdf_document:
+    #toc: yes
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+---
+
+```{r, echo=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(VIM)
+library(caret)
+library(DMwR)
+library(randomForest)
+library(nortest)
+library(car)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+```
+
+```{r, echo=FALSE}
+datos <- read.csv("datos_originales.csv", stringsAsFactors=FALSE)
+aplicar <- read.csv("concurso.csv", stringsAsFactors=FALSE)
+```
+
+#1. Descripción del dataset
+
+En abril de 1912, durante su viaje inaugural, el Titanic se hundió después de chocar con un iceberg, matando a 1502 de 2224 pasajeros y tripulantes. Una de las razones por las que el naufragio llevó a tal pérdida de vidas humanas fue que no había suficientes botes salvavidas para los pasajeros y la tripulación. Aunque siempre habrá algún elemento de azar a considerar, algunos grupos de personas tenían más probabilidades de sobrevivir al hundimiento que otros.  
+
+El objetivo de esta práctica es elaborar un árbol de clasificación, para predecir que grupos de **pasajeros** tienen - o mejor dicho, tenían - una mayor probabilidad de sobrevivir al hundimiento del Titanic.  
+
+Los objetivos académicos de la práctica son los siguientes:  
+- Aprender a aplicar los conocimientos adquiridos y su capacidad de resolución de problemas en entornos nuevos o poco conocidos dentro de contextos más amplios o multidisciplinares.  
+- Saber identificar los datos relevantes y los tratamientos necesarios (integración, limpieza y validación) para llevar a cabo un proyecto analítico.  
+- Aprender a analizar los datos adecuadamente para abordar la información contenida en los datos.  
+- Identificar la mejor representación de los resultados para aportar conclusiones sobre el problema planteado en el proceso analítico.  
+- Actuar con los principios éticos y legales relacionados con la manipulación de datos en función del ámbito de aplicación.  
+- Desarrollar las habilidades de aprendizaje que les permitan continuar estudiando de un modo que tendrá que ser en gran medida autodirigido o autónomo.  
+- Desarrollar la capacidad de búsqueda, gestión y uso de información y recursos en el ámbito de la ciencia de datos.  
+
+Los elementos del dataset son:  
+
+```{r}
+colnames(datos)
+```
+
+Donde:  
+- PassengerId: Identificador
+- Survived: Supervivencia 0 = No, 1 = Sí  
+- Pclass: Clase de Ticket 1 = 1ra, 2 = 2da, 3 = 3ra       
+- Name: Nombre del pasajero  
+- Sex: Sexo del pasajero  
+- Age: Edad del pasajero (en años)  
+- SibSp: # de hermanos / cónyuges a bordo del Titanic  
+- Parch: # de padres / hijos a bordo del Titanic   
+- Ticket: Número de boleto  
+- Fare: Tarifa  
+- Cabin: Número de cabina  
+- Embarked: Puerto de Embarque C = Cherbourg, Q = Queenstown, S = Southampton  
+
+Una descripción de los tipos de datos que R asignó es lo que visualizaremos a continuación:  
+
+```{r}
+glimpse(datos)
+```
+
+Como se observa, Survived y Pclass han sido consideradas como variables numéricas, cuando en realidad son de tipo  factor. Corregiremos esto.
+
+```{r}
+datos$Survived <- factor(datos$Survived)
+datos$Pclass <- factor(datos$Pclass)
+```
+
+Además, dado que SibSp y Parch toman una cantidad finita de valores, las consideraremos como tipo factor.   
+
+```{r}
+datos$SibSp <- factor(datos$SibSp)
+datos$Parch <- factor(datos$Parch)
+```
+Asimismo, las variables Sex y Embarked, consideradas como tipo character, son en realidad del tipo factor.  
+
+```{r}
+datos$Sex <- factor(datos$Sex)
+datos$Embarked <- factor(datos$Embarked)
+```
+
+Por tanto, los tipos de datos del dataset quedan así:  
+
+```{r}
+glimpse(datos)
+```
+
+En resumen, en total, se tienen `r dim(datos)[1]` registros y `r dim(datos)[2]` variables, incluyendo a la variable objetivo: Survived.  
+
+#2. Integración y selección de los datos de interés a analizar 
+
+Como realizaremos un árbol de clasificación, no es necesario hacer una preselección de variables relevantes. Lo único que haremos será eliminar variables que no aportan información: nombre del pasajero, número de ticket, número de cabina y el identificador. En el caso de los tres primeros, son datos tipo caracter que no pueden ser tomados como factores, por ello su eliminación. En el caso de identificador, si bien es del tipo numérico, cumple el mismo propósito que el nombre del pasajero, y como no tiene sentido tomar como un factor el identificador, se elimina.  
+
+```{r}
+datos <- datos[,colnames(datos)!="Name"]
+datos <- datos[,colnames(datos)!="Ticket"]
+datos <- datos[,colnames(datos)!="Cabin"]
+datos <- datos[,colnames(datos)!="PassengerId"]
+```
+
+Ahora, en total, se tienen `r dim(datos)[1]` registros y `r dim(datos)[2]` variables, incluyendo a la variable objetivo: Survived.  
+
+#3. Limpieza de los datos
+
+##3.1. ¿Los datos contienen ceros o elementos vacíos? ¿Cómo gestionarías cada uno de estos casos?
+
+Podemos contabilizar los elementos vacíos de las variables    
+
+```{r}
+datos.na = data.frame(sapply(datos, complete.cases)) 
+sapply(-datos.na+1, sum) 
+```
+
+Como se observa, el número de valores perdidos para Age es relativamente alto (`r round(177/dim(datos)[1]*100,1)`%) . Una opción sería imputar los valores faltantes en Age con la ayuda de algún algoritmo; otra opción es eliminar todos los registros con valores perdidos en Age, pues aún eliminando estos registros, tendríamos suficiente muestra para construir nuestro árbol de clasificación.  
+
+Antes de decidir si imputaremos valores para Age o si eliminaremos los registros con valores perdidos en Age, conviene verificar si los valores perdidos no siguen algún patrón. Para ello, utilizaremos una matrixplot.  
+
+```{r, warning=FALSE}
+matrixplot(datos, sortby = "Survived") 
+```
+
+Como podemos observar, ordenando los datos respecto a nuestra variable objetivo, los valores perdidos en Age (representados en color rojo) no siguen ningún patrón.    
+
+Imputaremos los datos con el algoritmo random forest, mediante el cual se generan N árboles de clasificación en forma aleatoria, con información del dataset, para imputar los datos faltantes.  
+
+```{r}
+datos.imputed <- rfImpute(Survived ~ ., datos)
+```
+
+Como podemos verificar, ya no tenemos valores perdidos.   
+
+```{r}
+datos.na = data.frame(sapply(datos.imputed, complete.cases)) 
+sapply(-datos.na+1, sum) 
+```
+
+También, debemos verificar que, para el caso de las variables categóricas (factor), todos sus valores están correctamente etiquetados. Es de decir, que no se tengan valores en las categorías del tipo " ".    
+
+```{r}
+datos.factor <- datos.imputed[sapply(datos.imputed, is.factor)]
+apply(datos.factor, 2, table)
+```
+
+Como se observa, para el caso de Embarked, dos de sus valores no están etiquetados. Elimaremos estos dos registros del dataset.    
+
+```{r}
+datos.imputed <- filter(datos.imputed, datos.imputed$Embarked=="C" | datos.imputed$Embarked=="Q" | datos.imputed$Embarked=="S")
+datos.imputed$Embarked <- factor(datos.imputed$Embarked)
+```
+
+Por tanto, en total, se tienen `r dim(datos.imputed)[1]` registros y `r dim(datos.imputed)[2]` variables, incluyendo a la variable objetivo: Survived.  
+
+
+##3.2. Identificación y tratamiento de valores extremos.
+
+Para identificar valores extremos realizaremos boxplot de cada variable numérica en el dataset.
+
+```{r}
+datos.numeric <- datos.imputed[sapply(datos.imputed, is.numeric)]
+
+for (i in 1:dim(datos.numeric)[2]){
+  boxplot(datos.numeric[,i], main=names(datos.numeric)[i], border = "blue", col = "grey90")
+  }
+```
+
+Gráficamente, podemos interpretar que tanto para Age como para Fare se observan una gran cantidad de valores extremos; sin embargo, será mejor inspeccionar al detalle cuántos valores extremos tenemos en estas dos variables.  
+
+```{r}
+#Valores extremos para Age
+boxplot.stats(datos.imputed$Age)$out
+
+#Valores extremos para Fare
+boxplot.stats(datos.imputed$Fare)$out
+```
+
+Podemos observar que en el caso de Fare es donde se tiene un elevado número de valores extremos (114). Una solución podría ser recortar la muestra, eliminando los registros con valores extremos en Fare; sin embargo, debemos recordar que el problema de los valores extremos se extiende cuando debemos hacer contrastes de hipótesis, correlaciones, regresiones, etc. En nuestro caso, un árbol de clasificación es un método computacional, y si bien es cierto que se rige bajo ciertas normas estadísticas, que no existan valores extremos en las variables no es un requisito necesario para su elaboración. Por tanto, mantendremos el dataset sin ningún cambio.   
+Además, se deben eliminar los valores extremos cuando estos representan valores no posibles o poco posibles en la variable de estudio; es decir, cuando que presumimos que se ha registradon por error estos valores extremos, y por tanto, es conveniente eliminarlos. No es así en nuestro caso; pues como observamos, en el caso de Age, estos valores son completamente posibles, y en el caso de Fare, también. Esto último se puede visualizar relacionando un boxplot de Fare según Pclass (Clase de Ticket).  
+
+```{r}
+boxplot(datos.imputed$Fare ~ datos.imputed$Pclass, main="Boxplot de Fare según Pclass", border = "blue", col = "grey90")
+```
+
+
+#4. Análisis de los datos  
+
+##4.1. Selección de los grupos de datos que se quieren analizar/comparar
+
+Seleccionamos los conjuntos de entrenamiento (train) y prueba (test):  
+
+```{r}
+set.seed(32)
+ids <- createDataPartition(datos.imputed$Survived,
+                           p = 0.7,
+                           list = F)
+
+train <- datos.imputed[ids,]
+test <- datos.imputed[-ids,]
+```
+
+Por tanto, del dataset original de `r dim(datos.imputed)[1]` registros, se han tomado `r dim(train)[1]` registros para el dataset train y `r dim(test)[1]` registros para el dataset test.  
+
+Respecto al pre-análisis, si bien es cierto que no podemos realizar correlaciones con las variables categóricas (tipo factor), sí podemos hacer tablas con ellas y hacer un barplot de ellas.
+
+```{r}
+datos.factor <- datos.imputed[sapply(datos.imputed, is.factor)]
+
+for (i in 1:5){
+  tabla <- datos.factor[,c(1,i+1)]
+  p <- ggplot(tabla, aes(x=tabla[,2], y="", fill=Survived)) +
+    geom_bar(stat="identity") + ylab("") + xlab("") +
+    scale_fill_manual(values=c("#969696", "#252525")) +
+    ggtitle(paste0("Barplot de ",colnames(tabla)[2],", según Survived"))
+  plot(p)
+  } 
+```
+
+Como se puede apreciar en los gráficos, se esperan las siguientes relaciones:  
+- Mayor probabilidad de sobrevivir si la clase de Ticket (Pclass) es 1 = 1ra.  
+- Mayor probabilidad de no sobrevivir si la clase de ticket (Pclass) es 3 = 3ra. 
+- Mayor probabilidad de sobrevivir si se es mujer.   
+- Mayor probabilidad de no sobrevivir si se es hombre.     
+- Mayor probabilidad de no sobrevivir si el número de hermanos / cónyuges a bordo del Titanic (SibSp) es cero.   
+- Mayor probabilidad de no sobrevivir si el número de padres / hijos a bordo del Titanic (Parch) es cero.   
+- Mayor probabilidad de no sobrevivir si el puerto de embarque (Embarked) es S = Southampton.    
+
+Y respecto a las variables numéricas, podemos realizar un boxplot de ellas, diferenciandolas según Survived.  
+
+```{r}
+boxplot(datos.imputed$Age ~ datos.imputed$Survived, main="Boxplot de Age según Survived", border = "blue", col = "grey90")
+boxplot(datos.imputed$Fare ~ datos.imputed$Survived, main="Boxplot de Fare según Survived", border = "blue", col = "grey90")
+```
+
+De estos últimos gráficos, se puede apreciar que, con respecto a Age, no se aprecia mayor diferencia cuando se agrupan los datos según Survived; mientras que, para el caso de Fare, se aprecia cierta dierencia cuando se agrupan los datos según Survived.   
+
+##4.2. Comprobación de la normalidad y homogeneidad de la varianza  
+
+Para evaluar la normalidad en las variables numéricas del dataset utilizaremos el test de Kolmogorov-Smirnov.  
+
+```{r}
+datos.numeric <- datos.imputed[sapply(datos.imputed, is.numeric)]
+apply(datos.numeric, 2, lillie.test)
+```
+
+Como se observa, tanto para Age como para Fare, el test arroja por resultado No Normalidad. Como se conoce, las consecuencias de la no normalidad afectan principalmente a los test de hipótesis paramétricos y a los modelos de regresión: los estimadores mínimo-cuadráticos no son eficientes (de mínima varianza) y los intervalos de confianza de los parámetros del modelo y los contrastes de significancia son solamente aproximados y no exactos.  
+
+Podríamos aplicar una normalización a Age y Fare, con la desventaja que perderíamos interpretabilidad al realizar el árbol de clasificación y, dado que no es necesario que los datos numéricos sean normales para aplicar el árbol de clasificación, optaremos por no transformar Age ni Fare.  
+
+Ahora, aplicaremos el test respectivo para probar la homocesasticidad de las variables numéricas en los niveles del factor Survived.
+Deberíamos de usar, en presencia de normalidad en las variables un F-test, pero dado que no cumplen esta condición, lo más recomendable es aplicar el test de Levene, utilizando la mediana.    
+
+```{r}
+leveneTest(y = datos.imputed$Age, group = datos.imputed$Survived, center = "median")
+leveneTest(y = datos.imputed$Fare, group = datos.imputed$Survived, center = "median")
+```
+
+Como se observa, tanto para el caso de Age como Fare, el test de Levene arroja heterocedasticidad de varianza. Es decir que el test encuentra diferencias significativas entre las varianzas de los dos grupos (Survived==1 y Survived==0) para las variables Age y Fare.   
+
+
+##4.3. Aplicación de pruebas estadísticas para comparar los grupos de datos
+
+Entrenamos el árbol de clasificación  
+
+```{r}
+tree <- rpart(Survived ~ ., data=train)
+```
+
+Mostramos los resultados del entrenamiento
+
+```{r}
+tree
+```
+
+Como puede observarse, las variables Parch y Embarked no han sido consideradas por el algoritmo del árbol de clasificación; por tanto, es preferible eliminarlas del dataset.  
+
+```{r}
+datos.imputed <- datos.imputed[,colnames(datos.imputed)!="Parch"]
+datos.imputed <- datos.imputed[,colnames(datos.imputed)!="Embarked"]
+```
+
+Creamos nuevamente los datasets train y test.  
+
+```{r}
+set.seed(32)
+ids <- createDataPartition(datos.imputed$Survived,
+                           p = 0.7,
+                           list = F)
+
+train <- datos.imputed[ids,]
+test <- datos.imputed[-ids,]
+```
+
+Realizamos nuevamente el entrenamiento del árbol de clasificación.  
+
+```{r}
+tree <- rpart(Survived ~ ., data=train)
+```
+
+Mostramos los resultados del entrenamiento
+
+```{r}
+tree
+```
+
+Para una mejor interpretación, mostramos gráficamente el árbol de clasificación.  
+
+```{r}
+rpart.plot(tree, extra = 100, type = 3)
+```
+
+Cada nodo resultante refleja la predicción para Survived. De todos ellos, son dos los que deben llamarnos la atención, pues en conjunto representan el 80% de la predicción para Survived. El primero de ellos es 61%, que quiere decir que si se es hombre y se tiene una edad mayor o igual a 9.5 años, se tiene una probabilidad de no supervivencia del 61%. El segundo, 19%, significa que si se es mujer y el ticket es de 1ra o 2da clase, se tiene una probabilidad de supervivencia del 19%.  
+
+Aplicamos el árbol de clasificación al test.  
+
+```{r}
+newdata <- test[,colnames(test)!="Survived"]
+prediccion <- predict(tree, newdata=newdata, type="class")
+```
+
+Mostramos los resultados de aplicar el árbol de clasificación al test.  
+
+```{r}
+confusionMatrix(data=prediccion, reference=test$Survived, positive="1")
+```
+
+#5. Representación de los resultados a partir de tablas y gráficas  
+
+A fin de representar la precisión de la predicción utilizando el árbol de clasificación, graficaremos una curva ROC.   
+
+```{r}
+prob_tree <- predict(tree, newdata=test, type="prob")
+ROC <- roc(test$Survived, prob_tree[,2], percent = T, smooth = F, auc = T, ci = F)
+plot(ROC, print.auc = T, col = "darkblue", main="Curva ROC", grid = T)
+```
+
+Y donde el intervalo de confianza para el área bajo la curva es:  
+
+```{r}
+ci.auc(ROC)
+```
+
+Por otra parte, de https://www.kaggle.com/c/titanic se descargaron dos dataset. El primero es el que hemos venido utilizando para hacer el train y test. El segundo dataset es el siguiente:
+  
+```{r}
+glimpse(aplicar)
+```
+
+Como puede observarse, no contiene a la variable Survived. Es decir, que una vez que utilicemos el árbol de clasificación no podremos elaborar una matriz de confusión ni tampoco evaluar el Accuracy; sin embargo, la predicción que obtengamos nos servirá para participar en la competencia de Kaggle.  
+
+Para aplicar el árbol modelado primero debemos convertir en factor algunas variables.    
+
+```{r}
+aplicar$Pclass <- factor(aplicar$Pclass)
+aplicar$SibSp <- factor(aplicar$SibSp)
+aplicar$Sex <- factor(aplicar$Sex)
+```
+
+Aplicamos el árbol de clasificación y guardamos la predicción en un nuevo dataset.  
+
+```{r}
+pred <- predict(tree, newdata=aplicar, type="class")
+pred <- cbind(aplicar$PassengerId, pred)
+colnames(pred) <- c("PassengerId","Survived")
+pred <- data.frame(pred)
+pred$Survived <- ifelse(pred$Survived==1, 0,
+                        ifelse(pred$Survived==2, 1,
+                               NA))
+write.csv(pred, "prediccion_concurso.csv", row.names = F)
+```
+
+Las predicciones para este dataset son:  
+
+```{r}
+table(pred$Survived)
+prop.table(table(pred$Survived))
+```
+
+Exportaremos también el dataset recortado con los datos imputados.  
+
+```{r}
+write.csv(datos.imputed, "datos_finales.csv")
+```
+
+#6. Resolución del problema 
+
+Podemos afirmar que las variables más importantes para el árbol de clasificación son: Sex, Age y Pclass. Por tanto, son las que afectan más a la supervivencia. Sin embargo, cabe aclarar el sentido de esta conclusión, pues afectan en gran medida a la supervivencia la interacción de ellas y no cada una de ellas por sí misma. Por ejemplo, el hecho de ser mujer por sí solo no es garantía de supervivencia, sin embargo, si se es mujer y se pertenece a la 1ra o 2da clase, entonces sí se tiene una buena probabilidad de sobrevivir.   
+
+Otro aspecto a mencionar es que las suposiciones producto del análisis de los gráficos del punto 4.1 han resultado ser verdaderas, salvo las relacionadas a las variables Parch y Embarked, que finalmente no fueron consideradas por el algoritmo del árbol de clasificación.  
+
+Y respecto a la precisión de predicción del árbol de clasificación, podemos afirmar que esta ha sido satisfactoria, pues alcanza un valor superior al 80%.  
+
+Por último, debemos mencionar que, una mejora del árbol de clasificación puede lograrse realizando una poda y/o construyendo un bosque.  
+
